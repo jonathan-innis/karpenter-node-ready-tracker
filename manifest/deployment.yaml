@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: karpenter-node-ready-tracker
+  namespace: karpenter
+  labels:
+    app: karpenter-node-ready-tracker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: karpenter-node-ready-tracker
+  template:
+    metadata:
+      labels:
+        app: karpenter-node-ready-tracker
+    spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: karpenter.sh/nodepool
+                operator: DoesNotExist
+      serviceAccountName: karpenter-node-ready-tracker
+      containers:
+      - name: karpenter-node-ready-tracker
+        image: <Update Container With Image>
+        resources:
+          requests:
+            cpu: "2"
+            memory: "4Gi"
+          limits:
+            cpu: "2"
+            memory: "4Gi"
+        volumeMounts:
+        - name: data-volume
+          mountPath: /app
+      tolerations:
+      - key: "CriticalAddonsOnly"
+        operator: "Exists"
+        effect: "NoSchedule"
+      - key: dedicated
+        operator: Equal
+        value: karpenter
+      volumes:
+      - name: data-volume
+        emptyDir: {}
+      priorityClassName: system-cluster-critical
