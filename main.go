@@ -42,7 +42,7 @@ func main() {
 	nodeLaunchTime := &sync.Map{}
 
 	nodeWatcher := &nodeWatcher{startTime: time.Now(), kubeClient: mgr.GetClient(), nodeLaunchTime: nodeLaunchTime, nodeReadyTime: &sync.Map{}, nodeSchedulableTime: &sync.Map{}}
-	nodeClaimWatcher := &nodeClaimWatcher{kubeClient: mgr.GetClient(), nodeLaunchTime: nodeLaunchTime}
+	nodeClaimWatcher := &nodeClaimWatcher{startTime: time.Now(), kubeClient: mgr.GetClient(), nodeLaunchTime: nodeLaunchTime, nodeRegisteredTime: &sync.Map{}}
 	lo.Must0(nodeWatcher.SetupWithManager(mgr))
 	lo.Must0(nodeClaimWatcher.SetupWithManager(mgr))
 	mgr.GetCache().IndexField(ctx, &v1.NodeClaim{}, "status.providerID", func(o client.Object) []string {
@@ -93,7 +93,7 @@ func (c *nodeWatcher) Reconcile(ctx context.Context, request reconcile.Request) 
 	if !ok {
 		return reconcile.Result{RequeueAfter: time.Second}, nil
 	}
-	diff, loaded := c.nodeReadyTime.LoadOrStore(node.Name, time.Since(launchTime.(time.Time)))
+	diff, loaded := c.nodeReadyTime.LoadOrStore(node.Name, cond.LastTransitionTime.Time.Sub(launchTime.(time.Time)))
 	if !loaded {
 		fmt.Printf("NodeReady,%s,%d\n", node.Name, int(diff.(time.Duration).Truncate(time.Second).Seconds()))
 	}
@@ -124,9 +124,11 @@ func (c *nodeWatcher) SetupWithManager(mgr manager.Manager) error {
 }
 
 type nodeClaimWatcher struct {
-	kubeClient     client.Client
-	nodeLaunchTime *sync.Map
-	once           sync.Once
+	startTime          time.Time
+	kubeClient         client.Client
+	nodeLaunchTime     *sync.Map
+	nodeRegisteredTime *sync.Map
+	once               sync.Once
 }
 
 func (*nodeClaimWatcher) Name() string {
@@ -151,6 +153,12 @@ func (c *nodeClaimWatcher) Reconcile(ctx context.Context, request reconcile.Requ
 		return reconcile.Result{}, nil
 	}
 	c.nodeLaunchTime.LoadOrStore(nodeClaim.Status.NodeName, nodeClaim.StatusConditions().Get(v1.ConditionTypeLaunched).LastTransitionTime.Time)
+	if nodeClaim.StatusConditions().Get(v1.ConditionTypeRegistered).IsTrue() && nodeClaim.StatusConditions().Get(v1.ConditionTypeRegistered).LastTransitionTime.Time.After(c.startTime) {
+		registeredTime, loaded := c.nodeRegisteredTime.LoadOrStore(nodeClaim.Status.NodeName, nodeClaim.StatusConditions().Get(v1.ConditionTypeRegistered).LastTransitionTime.Time)
+		if !loaded {
+			fmt.Printf("NodeRegistered,%s,%d\n", nodeClaim.Status.NodeName, int(registeredTime.(time.Time).Sub(nodeClaim.StatusConditions().Get(v1.ConditionTypeLaunched).LastTransitionTime.Time).Truncate(time.Second).Seconds()))
+		}
+	}
 	return reconcile.Result{}, nil
 }
 
@@ -162,6 +170,7 @@ func (c *nodeClaimWatcher) SetupWithManager(mgr manager.Manager) error {
 		WithEventFilter(predicate.Funcs{
 			UpdateFunc: func(o event.TypedUpdateEvent[client.Object]) bool {
 				return (o.ObjectNew.(*v1.NodeClaim).StatusConditions().Get(v1.ConditionTypeLaunched).IsTrue() && !o.ObjectOld.(*v1.NodeClaim).StatusConditions().Get(v1.ConditionTypeLaunched).IsTrue()) ||
+					(o.ObjectNew.(*v1.NodeClaim).StatusConditions().Get(v1.ConditionTypeRegistered).IsTrue() && !o.ObjectOld.(*v1.NodeClaim).StatusConditions().Get(v1.ConditionTypeRegistered).IsTrue()) ||
 					(o.ObjectOld.(*v1.NodeClaim).Status.NodeName == "" && o.ObjectNew.(*v1.NodeClaim).Status.NodeName != "")
 			},
 		}).
