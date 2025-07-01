@@ -2,8 +2,11 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
+	"io"
 	"log"
+	"os"
 	"sync"
 	"time"
 
@@ -38,7 +41,39 @@ func main() {
 	config.Burst = 5000
 	mgr := lo.Must(controllerruntime.NewManager(config, controllerruntime.Options{Metrics: metricsserver.Options{BindAddress: "0"}}))
 
-	fmt.Println("Event,Node,Duration (s)")
+	// Define flags
+	outputFile := lo.FromPtr(flag.String("o", "", "Output CSV file"))
+	overwrite := lo.FromPtr(flag.Bool("f", false, "Force overwrite if file exists"))
+	flag.Parse()
+
+	// Check if file exists
+	_, err := os.Stat(outputFile)
+	fileExists := !os.IsNotExist(err)
+
+	if fileExists && !overwrite && outputFile != "" {
+		log.Fatalf("file %s already exists. Use -f flag to force overwrite\n", outputFile)
+	}
+
+	file := &os.File{}
+	var multiWriter io.Writer
+	if outputFile != "" {
+		file, err = os.Create(outputFile)
+		if err != nil {
+			log.Fatalf("failed creating output file %s, %s\n", outputFile, err)
+			return
+		}
+		multiWriter = io.MultiWriter(
+			file,      // Write to file
+			os.Stdout, // Write to standard output
+		)
+	} else {
+		multiWriter = io.MultiWriter(
+			os.Stdout, // Write to standard output
+		)
+	}
+	defer file.Close()
+
+	fmt.Fprintf(multiWriter, "Event,Node,Duration (s)\n")
 	nodeLaunchTime := &sync.Map{}
 
 	nodeWatcher := &nodeWatcher{startTime: time.Now(), kubeClient: mgr.GetClient(), nodeLaunchTime: nodeLaunchTime, nodeReadyTime: &sync.Map{}, nodeSchedulableTime: &sync.Map{}}
@@ -56,6 +91,7 @@ func main() {
 }
 
 type nodeWatcher struct {
+	writer              io.Writer
 	startTime           time.Time
 	kubeClient          client.Client
 	nodeLaunchTime      *sync.Map
@@ -95,14 +131,14 @@ func (c *nodeWatcher) Reconcile(ctx context.Context, request reconcile.Request) 
 	}
 	diff, loaded := c.nodeReadyTime.LoadOrStore(node.Name, cond.LastTransitionTime.Time.Sub(launchTime.(time.Time)))
 	if !loaded {
-		fmt.Printf("NodeReady,%s,%d\n", node.Name, int(diff.(time.Duration).Truncate(time.Second).Seconds()))
+		fmt.Fprintf(c.writer, "NodeReady,%s,%d\n", node.Name, int(diff.(time.Duration).Truncate(time.Second).Seconds()))
 	}
 	if len(node.Spec.Taints) > 0 {
 		return reconcile.Result{}, nil
 	}
 	diff, loaded = c.nodeSchedulableTime.LoadOrStore(node.Name, time.Since(launchTime.(time.Time)))
 	if !loaded {
-		fmt.Printf("NodeSchedulable,%s,%d\n", node.Name, int(diff.(time.Duration).Truncate(time.Second).Seconds()))
+		fmt.Fprintf(c.writer, "NodeSchedulable,%s,%d\n", node.Name, int(diff.(time.Duration).Truncate(time.Second).Seconds()))
 	}
 	return reconcile.Result{}, nil
 }
@@ -124,6 +160,7 @@ func (c *nodeWatcher) SetupWithManager(mgr manager.Manager) error {
 }
 
 type nodeClaimWatcher struct {
+	writer             io.Writer
 	startTime          time.Time
 	kubeClient         client.Client
 	nodeLaunchTime     *sync.Map
@@ -156,7 +193,7 @@ func (c *nodeClaimWatcher) Reconcile(ctx context.Context, request reconcile.Requ
 	if nodeClaim.StatusConditions().Get(v1.ConditionTypeRegistered).IsTrue() && nodeClaim.StatusConditions().Get(v1.ConditionTypeRegistered).LastTransitionTime.Time.After(c.startTime) {
 		registeredTime, loaded := c.nodeRegisteredTime.LoadOrStore(nodeClaim.Status.NodeName, nodeClaim.StatusConditions().Get(v1.ConditionTypeRegistered).LastTransitionTime.Time)
 		if !loaded {
-			fmt.Printf("NodeRegistered,%s,%d\n", nodeClaim.Status.NodeName, int(registeredTime.(time.Time).Sub(nodeClaim.StatusConditions().Get(v1.ConditionTypeLaunched).LastTransitionTime.Time).Truncate(time.Second).Seconds()))
+			fmt.Fprintf(c.writer, "NodeRegistered,%s,%d\n", nodeClaim.Status.NodeName, int(registeredTime.(time.Time).Sub(nodeClaim.StatusConditions().Get(v1.ConditionTypeLaunched).LastTransitionTime.Time).Truncate(time.Second).Seconds()))
 		}
 	}
 	return reconcile.Result{}, nil
