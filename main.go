@@ -151,6 +151,9 @@ func (c *nodeWatcher) Reconcile(ctx context.Context, request reconcile.Request) 
 		return reconcile.Result{}, fmt.Errorf("expected a single reservation from DescribeInstances")
 	}
 	instance := out.Reservations[0].Instances[0]
+	if lo.FromPtr(instance.LaunchTime).Before(time.Date(2025, time.January, 1, 0, 0, 0, 0, time.UTC)) {
+		return reconcile.Result{RequeueAfter: time.Second * 10}, nil
+	}
 	launchTime, loaded := c.nodeLaunchTime.LoadOrStore(node.Name, lo.FromPtr(instance.LaunchTime))
 	if !loaded {
 		fmt.Fprintf(c.writer, "NodeLaunched,%s,%s\n", node.Name, launchTime.(time.Time).Format(time.RFC3339))
