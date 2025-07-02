@@ -23,16 +23,17 @@ spec:
               - key: karpenter.sh/nodepool
                 operator: DoesNotExist
       serviceAccountName: karpenter-node-ready-tracker
+      automountServiceAccountToken: true
       containers:
       - name: karpenter-node-ready-tracker
-        image: <Update Container With Image>
+        image: <Update with Container Image>
         resources:
           requests:
-            cpu: "2"
-            memory: "4Gi"
+            cpu: "20"
+            memory: "50Gi"
           limits:
-            cpu: "2"
-            memory: "4Gi"
+            cpu: "20"
+            memory: "50Gi"
         volumeMounts:
         - name: data-volume
           mountPath: /app

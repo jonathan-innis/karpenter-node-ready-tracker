@@ -1,4 +1,4 @@
-module github.com/jonathan-innis/karpenter-node-startup-tracker
+module github.com/jonathan-innis/karpenter-node-ready-tracker
 
 go 1.24.4
 
